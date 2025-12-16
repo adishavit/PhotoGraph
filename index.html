@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
   <title>PhotoGraph — Trip Mapper</title>
 
-  <!-- Leaflet (map) -->
+  <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
         integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
@@ -15,7 +15,16 @@
   <script src="https://cdn.jsdelivr.net/npm/exif-js@2.3.0/exif.min.js"></script>
 
   <style>
-    :root { --blue:#007AFF; --bg:#f5f5f7; --text:#111; --muted:#666; --card:#fff; --shadow:0 2px 12px rgba(0,0,0,.08); }
+    :root {
+      --blue:#007AFF;
+      --bg:#f5f5f7;
+      --text:#111;
+      --muted:#666;
+      --card:#fff;
+      --shadow:0 2px 12px rgba(0,0,0,.08);
+      --border:#ddd;
+      --warn:#b45309;
+    }
 
     html, body { height:100%; margin:0; }
     body {
@@ -44,10 +53,10 @@
       user-select: none;
       display:inline-flex; align-items:center; justify-content:center;
       gap:8px;
+      background:#e9e9ee; color:#111;
     }
     .btn.primary { background: var(--blue); color:#fff; }
     .btn.secondary { background:#111; color:#fff; }
-    .btn.ghost { background:#e9e9ee; color:#111; }
     .btn:disabled { opacity:.45; cursor:not-allowed; }
 
     #fileInput { display:none; }
@@ -60,10 +69,25 @@
       flex:1;
       min-width: 160px;
       padding: 9px 10px;
-      border: 1px solid #ddd;
+      border: 1px solid var(--border);
       border-radius: 10px;
       background:#fff;
       font-size: 13px;
+    }
+
+    .options {
+      margin-top: 10px;
+      display:flex; gap:10px; flex-wrap:wrap;
+      align-items:center;
+    }
+    .chip {
+      display:flex; gap:8px; align-items:center;
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background:#fff;
+      font-size: 13px;
+      color: var(--muted);
     }
 
     .status {
@@ -79,6 +103,7 @@
 
     .tiny { font-size: 12px; color: var(--muted); }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+    .warn { color: var(--warn); }
   </style>
 </head>
 
@@ -86,8 +111,10 @@
   <div id="controls">
     <div class="row">
       <label class="btn primary" for="fileInput">📸 Choose photos</label>
-      <button id="processBtn" class="btn secondary" disabled>▶︎ Process</button>
-      <button id="clearBtn" class="btn ghost" disabled>Clear</button>
+      <button id="processBtn" class="btn secondary" disabled>▶︎ Process (snap to roads)</button>
+      <button id="clearBtn" class="btn" disabled>Clear</button>
+      <button id="shareBtn" class="btn" disabled>Share URL</button>
+      <button id="gmapsBtn" class="btn" disabled>Open in Google Maps</button>
       <span class="tiny" id="pickedInfo"></span>
     </div>
 
@@ -98,6 +125,21 @@
       <input type="datetime-local" id="endTime" aria-label="End time">
     </div>
 
+    <div class="options">
+      <label class="chip" title="Controls how aggressively points are simplified before snapping/sharing (fewer points = faster snapping + shorter share URLs).">
+        Simplify:
+        <select id="simplifySelect" style="margin-left:6px; padding:6px; border:1px solid var(--border); border-radius:8px;">
+          <option value="light">Light</option>
+          <option value="medium" selected>Medium</option>
+          <option value="strong">Strong</option>
+        </select>
+      </label>
+
+      <span class="chip" title="Uses OSRM public routing (driving). Coordinates are sent to the routing service to compute a road-following route.">
+        Snapping: OSRM driving (online)
+      </span>
+    </div>
+
     <div class="status">
       <progress id="progress" value="0" max="100"></progress>
       <div id="statusLine">Pick photos, then tap Process.</div>
@@ -105,14 +147,14 @@
     </div>
 
     <div class="tiny">
-      Notes: Photos are processed locally in your browser; the basemap loads online (OpenStreetMap).
+      Photos are processed locally in your browser. Snapping sends coordinates to the routing service to compute a road-following route.
     </div>
   </div>
 
   <div id="map"></div>
 
   <script>
-    // ---------- Map ----------
+    // -------------------- Map --------------------
     const map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors',
@@ -122,16 +164,26 @@
     const photoLayer = L.layerGroup().addTo(map);
     const pathLayer  = L.layerGroup().addTo(map);
 
-    // ---------- UI ----------
-    const fileInput  = document.getElementById('fileInput');
-    const processBtn = document.getElementById('processBtn');
-    const clearBtn   = document.getElementById('clearBtn');
-    const statusLine = document.getElementById('statusLine');
-    const statsLine  = document.getElementById('statsLine');
-    const progressEl = document.getElementById('progress');
-    const pickedInfo = document.getElementById('pickedInfo');
+    // -------------------- UI --------------------
+    const fileInput      = document.getElementById('fileInput');
+    const processBtn     = document.getElementById('processBtn');
+    const clearBtn       = document.getElementById('clearBtn');
+    const shareBtn       = document.getElementById('shareBtn');
+    const gmapsBtn       = document.getElementById('gmapsBtn');
+    const statusLine     = document.getElementById('statusLine');
+    const statsLine      = document.getElementById('statsLine');
+    const progressEl     = document.getElementById('progress');
+    const pickedInfo     = document.getElementById('pickedInfo');
+    const simplifySelect = document.getElementById('simplifySelect');
 
     let selectedFiles = [];
+
+    // Photo-derived (for markers)
+    let lastPhotoPoints = []; // [{name,lat,lng,date}]
+    // The route line we drew (prefer snapped, else fallback raw)
+    let lastRouteLatLngs = []; // [[lat,lng],...]
+    // Whether current route is snapped or fallback
+    let lastRouteIsSnapped = false;
 
     fileInput.addEventListener('change', () => {
       selectedFiles = Array.from(fileInput.files || []);
@@ -141,7 +193,7 @@
       progressEl.value = 0;
       statsLine.textContent = '';
       statusLine.textContent = selectedFiles.length
-        ? 'Ready. Tap Process to extract GPS + draw route.'
+        ? 'Ready. Tap Process to extract GPS → snap to roads → draw route.'
         : 'Pick photos, then tap Process.';
     });
 
@@ -151,17 +203,30 @@
       pickedInfo.textContent = '';
       processBtn.disabled = true;
       clearBtn.disabled = true;
+
+      lastPhotoPoints = [];
+      lastRouteLatLngs = [];
+      lastRouteIsSnapped = false;
+
+      shareBtn.disabled = true;
+      gmapsBtn.disabled = true;
+
       progressEl.value = 0;
       statusLine.textContent = 'Cleared. Pick photos, then tap Process.';
       statsLine.textContent = '';
+
       photoLayer.clearLayers();
       pathLayer.clearLayers();
+
+      if (location.hash) history.replaceState(null, '', location.pathname);
     });
 
     processBtn.addEventListener('click', async () => {
       if (!selectedFiles.length) return;
 
       processBtn.disabled = true;
+      shareBtn.disabled = true;
+      gmapsBtn.disabled = true;
 
       const startFilter = document.getElementById('startTime').value
         ? new Date(document.getElementById('startTime').value) : null;
@@ -175,7 +240,6 @@
       statsLine.textContent = '';
       statusLine.textContent = `Processing 0 / ${selectedFiles.length}...`;
 
-      // Sequential + small yielding keeps iPhone Safari responsive
       for (let i = 0; i < selectedFiles.length; i++) {
         const f = selectedFiles[i];
         try {
@@ -184,7 +248,6 @@
           if (data && data.lat != null && data.lng != null) {
             withGps++;
 
-            // If user set time filters, we require a valid date for filtering
             const d = data.date || null;
             const timeFiltering = !!(startFilter || endFilter);
 
@@ -200,44 +263,177 @@
           } else {
             noGps++;
           }
-        } catch (e) {
+        } catch {
           errors++;
         }
 
         const pct = Math.round(((i + 1) / selectedFiles.length) * 100);
         progressEl.value = pct;
         statusLine.textContent = `Processing ${i + 1} / ${selectedFiles.length}...`;
-
         if ((i + 1) % 10 === 0) await sleep(0);
       }
 
       statsLine.textContent =
         `GPS: ${withGps} | No GPS: ${noGps} | Filtered out: ${filteredOut} | Errors: ${errors}`;
 
-      if (points.length > 0) {
-        drawRoute(points);
-        statusLine.textContent = `Done. Mapped ${points.length} points.`;
-      } else {
+      if (!points.length) {
+        lastPhotoPoints = [];
+        lastRouteLatLngs = [];
+        lastRouteIsSnapped = false;
+
         photoLayer.clearLayers();
         pathLayer.clearLayers();
+
         statusLine.textContent = 'Done. No usable GPS points found (or none within the selected time range).';
+        processBtn.disabled = false;
+        return;
       }
 
+      // Sort chronologically
+      points.sort((a, b) => (a.date || 0) - (b.date || 0));
+      lastPhotoPoints = points.slice();
+
+      // Always show markers (fast feedback)
+      drawMarkers(points);
+
+      // Build raw path from photos → simplify (this is the input to snapping)
+      const rawLatLngs = points.map(p => [p.lat, p.lng]);
+      const simplified = simplifyForLevel(rawLatLngs, simplifySelect.value);
+
+      // Snap to roads (primary)
+      statusLine.textContent = 'Snapping route to roads (OSRM driving)...';
+      try {
+        const snapped = await snapRouteOSRMChunked(simplified);
+        lastRouteLatLngs = snapped;
+        lastRouteIsSnapped = true;
+
+        drawPolyline(snapped, true);
+        statusLine.textContent = `Done. Snapped route + mapped ${points.length} photos.`;
+      } catch {
+        // Fallback (undocumented road / routing failure)
+        lastRouteLatLngs = simplified;
+        lastRouteIsSnapped = false;
+
+        drawPolyline(simplified, true);
+        statusLine.innerHTML = `<span class="warn">Snapping failed.</span> Showing fallback line from photo points (could be off-road / undocumented roads).`;
+      }
+
+      shareBtn.disabled = false;
+      gmapsBtn.disabled = false;
       processBtn.disabled = false;
     });
 
-    // ---------- EXIF extraction ----------
-    // We try:
-    // 1) exif-js direct getData(file) (works in some browsers)
-    // 2) fallback to ArrayBuffer + EXIF.readFromBinaryFile(DataView)
+    // -------------------- Share as URL --------------------
+    shareBtn.addEventListener('click', async () => {
+      if (!lastRouteLatLngs.length) return;
+
+      // Keep URLs sane: downsample + round. Prefer snapped line if we have it.
+      const shareMax = 140;
+      const line = downsampleEvenly(lastRouteLatLngs, shareMax).map(([lat, lng]) => [
+        +lat.toFixed(6),
+        +lng.toFixed(6)
+      ]);
+
+      const payload = {
+        v: 2,
+        snapped: !!lastRouteIsSnapped,
+        line
+      };
+
+      const b64 = base64UrlEncode(JSON.stringify(payload));
+      const url = `${location.origin}${location.pathname}#p=${b64}`;
+
+      try {
+        await navigator.clipboard.writeText(url);
+        statusLine.textContent = 'Share URL copied to clipboard.';
+      } catch {
+        prompt('Copy this URL:', url);
+      }
+    });
+
+    // -------------------- Open in Google Maps --------------------
+    gmapsBtn.addEventListener('click', () => {
+      const line = lastRouteLatLngs.length ? lastRouteLatLngs : (lastPhotoPoints.map(p => [p.lat, p.lng]));
+      if (!line.length) return;
+
+      // Waypoint limits: keep small
+      const sampled = downsampleEvenly(line, 23);
+
+      const origin = `${sampled[0][0]},${sampled[0][1]}`;
+      const destination = `${sampled[sampled.length - 1][0]},${sampled[sampled.length - 1][1]}`;
+      const mid = sampled.slice(1, -1).map(p => `${p[0]},${p[1]}`).join('|');
+
+      const url =
+        `https://www.google.com/maps/dir/?api=1` +
+        `&origin=${encodeURIComponent(origin)}` +
+        `&destination=${encodeURIComponent(destination)}` +
+        (mid ? `&waypoints=${encodeURIComponent(mid)}` : '') +
+        `&travelmode=driving`;
+
+      window.open(url, '_blank');
+    });
+
+    // -------------------- Restore from shared URL --------------------
+    (function restoreFromHash(){
+      const m = location.hash.match(/#p=([^&]+)/);
+      if (!m) return;
+
+      try {
+        const json = JSON.parse(base64UrlDecode(m[1]));
+        if (!json || (json.v !== 1 && json.v !== 2) || !Array.isArray(json.line) || json.line.length < 2) return;
+
+        lastRouteLatLngs = json.line.map(([lat, lng]) => [Number(lat), Number(lng)]);
+        lastRouteIsSnapped = (json.v === 2) ? !!json.snapped : true; // older v1 assumed snapped-ish
+        lastPhotoPoints = [];
+
+        photoLayer.clearLayers();
+        drawPolyline(lastRouteLatLngs, true);
+
+        shareBtn.disabled = false;
+        gmapsBtn.disabled = false;
+
+        statusLine.textContent = `Loaded shared route (${lastRouteLatLngs.length} points).`;
+        statsLine.textContent =
+          lastRouteIsSnapped
+            ? 'Shared URL contains the snapped route line (no photo names/times).'
+            : 'Shared URL contains a fallback line (not snapped).';
+      } catch {
+        // ignore
+      }
+    })();
+
+    // -------------------- Drawing --------------------
+    function drawMarkers(points) {
+      photoLayer.clearLayers();
+
+      points.forEach((p, idx) => {
+        const isEdge = (idx === 0 || idx === points.length - 1);
+        const t = p.date ? p.date.toLocaleString() : 'Unknown time';
+
+        L.circleMarker([p.lat, p.lng], {
+          radius: isEdge ? 8 : 4,
+          color: isEdge ? 'red' : '#333',
+          fillColor: isEdge ? 'red' : '#fff',
+          fillOpacity: 1
+        })
+        .addTo(photoLayer)
+        .bindPopup(`<div class="mono">${escapeHtml(p.name)}</div><div>${escapeHtml(t)}</div>`);
+      });
+    }
+
+    function drawPolyline(latLngs, fit=false) {
+      pathLayer.clearLayers();
+      const pl = L.polyline(latLngs, { color: '#007AFF', weight: 5, opacity: 0.9 }).addTo(pathLayer);
+      if (fit) map.fitBounds(pl.getBounds(), { padding: [40, 40] });
+    }
+
+    // -------------------- EXIF extraction --------------------
     async function getExifData(file) {
-      // First attempt: EXIF.getData on File
       const direct = await new Promise((resolve) => {
         try {
           EXIF.getData(file, function() {
             try {
-              const parsed = parseExifFromGetTag(this, file);
-              resolve(parsed);
+              resolve(parseExifFromGetTag(this, file));
             } catch {
               resolve(null);
             }
@@ -246,10 +442,8 @@
           resolve(null);
         }
       });
-
       if (direct) return direct;
 
-      // Fallback: ArrayBuffer
       const buf = await fileToArrayBuffer(file);
       try {
         const tags = EXIF.readFromBinaryFile(new DataView(buf));
@@ -264,7 +458,6 @@
       const lon = EXIF.getTag(exifThis, 'GPSLongitude');
       const latRef = EXIF.getTag(exifThis, 'GPSLatitudeRef');
       const lonRef = EXIF.getTag(exifThis, 'GPSLongitudeRef');
-
       if (!lat || !lon || !latRef || !lonRef) return null;
 
       const dateStr =
@@ -285,7 +478,6 @@
       const lon = tags.GPSLongitude;
       const latRef = tags.GPSLatitudeRef;
       const lonRef = tags.GPSLongitudeRef;
-
       if (!lat || !lon || !latRef || !lonRef) return null;
 
       const dateStr = tags.DateTimeOriginal || tags.DateTimeDigitized || tags.DateTime;
@@ -308,7 +500,6 @@
     }
 
     function toDecimal(coords, ref) {
-      // coords can be [d,m,s] numbers or rationals; handle both
       const d = rationalToFloat(coords[0]);
       const m = rationalToFloat(coords[1]);
       const s = rationalToFloat(coords[2]);
@@ -318,7 +509,6 @@
     }
 
     function rationalToFloat(x) {
-      // exif-js sometimes returns Number, sometimes {numerator, denominator}
       if (typeof x === 'number') return x;
       if (x && typeof x === 'object' && 'numerator' in x && 'denominator' in x && x.denominator) {
         return x.numerator / x.denominator;
@@ -328,7 +518,6 @@
 
     function parseExifDate(s) {
       if (!s || typeof s !== 'string') return null;
-      // "YYYY:MM:DD HH:MM:SS"
       const b = s.split(/\D/).filter(Boolean);
       if (b.length < 6) return null;
       const y = Number(b[0]), mo = Number(b[1]) - 1, d = Number(b[2]);
@@ -337,35 +526,169 @@
       return new Date(y, mo, d, h, mi, se);
     }
 
-    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+    // -------------------- Simplification (RDP) --------------------
+    function simplifyForLevel(latLngs, level) {
+      // epsilon meters
+      let eps = 25;
+      if (level === 'light') eps = 12;
+      if (level === 'medium') eps = 30;
+      if (level === 'strong') eps = 70;
 
-    // ---------- Draw ----------
-    function drawRoute(points) {
-      points.sort((a, b) => (a.date || 0) - (b.date || 0));
+      const rdp = rdpSimplifyLatLng(latLngs, eps);
 
-      photoLayer.clearLayers();
-      pathLayer.clearLayers();
-
-      const latLngs = points.map(p => [p.lat, p.lng]);
-
-      L.polyline(latLngs, { color: '#007AFF', weight: 4, opacity: 0.85 }).addTo(pathLayer);
-
-      points.forEach((p, idx) => {
-        const isEdge = (idx === 0 || idx === points.length - 1);
-        const t = p.date ? p.date.toLocaleString() : 'Unknown time';
-
-        L.circleMarker([p.lat, p.lng], {
-          radius: isEdge ? 8 : 4,
-          color: isEdge ? 'red' : '#333',
-          fillColor: isEdge ? 'red' : '#fff',
-          fillOpacity: 1
-        })
-        .addTo(photoLayer)
-        .bindPopup(`<div class="mono">${escapeHtml(p.name)}</div><div>${escapeHtml(t)}</div>`);
-      });
-
-      map.fitBounds(L.polyline(latLngs).getBounds(), { padding: [40, 40] });
+      // Also keep an upper bound so snapping stays fast on huge sets
+      if (rdp.length > 600) return downsampleEvenly(rdp, 600);
+      return rdp;
     }
+
+    function rdpSimplifyLatLng(latLngs, epsilonMeters) {
+      if (!latLngs || latLngs.length < 3) return latLngs || [];
+
+      const meanLat = latLngs.reduce((a,p)=>a+p[0],0) / latLngs.length;
+      const toXY = ([lat, lng]) => latLngToMeters(lat, lng, meanLat);
+      const pts = latLngs.map(toXY);
+
+      const keep = new Array(pts.length).fill(false);
+      keep[0] = true;
+      keep[pts.length - 1] = true;
+
+      rdpMark(pts, 0, pts.length - 1, epsilonMeters, keep);
+
+      const out = [];
+      for (let i = 0; i < latLngs.length; i++) if (keep[i]) out.push(latLngs[i]);
+      return out;
+    }
+
+    function rdpMark(pts, start, end, eps, keep) {
+      if (end <= start + 1) return;
+
+      const a = pts[start];
+      const b = pts[end];
+
+      let maxDist = -1;
+      let index = -1;
+
+      for (let i = start + 1; i < end; i++) {
+        const d = pointToSegmentDistance(pts[i], a, b);
+        if (d > maxDist) {
+          maxDist = d;
+          index = i;
+        }
+      }
+
+      if (maxDist > eps && index !== -1) {
+        keep[index] = true;
+        rdpMark(pts, start, index, eps, keep);
+        rdpMark(pts, index, end, eps, keep);
+      }
+    }
+
+    function latLngToMeters(lat, lng, meanLat) {
+      const R = 6371000;
+      const rad = Math.PI / 180;
+      const x = R * (lng * rad) * Math.cos(meanLat * rad);
+      const y = R * (lat * rad);
+      return [x, y];
+    }
+
+    function pointToSegmentDistance(p, a, b) {
+      const [px, py] = p, [ax, ay] = a, [bx, by] = b;
+      const dx = bx - ax, dy = by - ay;
+      if (dx === 0 && dy === 0) return Math.hypot(px - ax, py - ay);
+
+      const t = ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy);
+      const tt = Math.max(0, Math.min(1, t));
+      const cx = ax + tt * dx;
+      const cy = ay + tt * dy;
+      return Math.hypot(px - cx, py - cy);
+    }
+
+    function downsampleEvenly(arr, max) {
+      if (!arr || arr.length <= max) return arr || [];
+      const step = (arr.length - 1) / (max - 1);
+      const out = [];
+      for (let i = 0; i < max; i++) out.push(arr[Math.round(i * step)]);
+      out[0] = arr[0];
+      out[out.length - 1] = arr[arr.length - 1];
+      return out;
+    }
+
+    // -------------------- Snapping (OSRM) --------------------
+    async function snapRouteOSRMChunked(latLngs) {
+      if (latLngs.length < 2) return latLngs;
+
+      // OSRM demo constraints: keep per-request coords moderate
+      const MAX_PER_REQ = 80;
+
+      let work = latLngs;
+      if (work.length > 350) work = downsampleEvenly(work, 350);
+
+      const chunks = [];
+      for (let i = 0; i < work.length - 1; ) {
+        const end = Math.min(i + MAX_PER_REQ, work.length);
+        const chunk = work.slice(i, end);
+        if (chunk.length >= 2) chunks.push(chunk);
+        i = end - 1; // overlap
+      }
+
+      const stitched = [];
+      for (let ci = 0; ci < chunks.length; ci++) {
+        const chunk = chunks[ci];
+
+        const coords = chunk.map(([lat, lng]) => `${lng},${lat}`).join(';');
+        const url =
+          `https://router.project-osrm.org/route/v1/driving/${coords}` +
+          `?overview=full&geometries=geojson&steps=false`;
+
+        const res = await fetch(url);
+        if (!res.ok) throw new Error('OSRM request failed');
+        const json = await res.json();
+        if (!json.routes || !json.routes[0] || !json.routes[0].geometry) throw new Error('OSRM bad response');
+
+        const seg = json.routes[0].geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+
+        if (ci === 0) {
+          stitched.push(...seg);
+        } else {
+          if (stitched.length && seg.length) {
+            const last = stitched[stitched.length - 1];
+            const first = seg[0];
+            if (Math.abs(last[0]-first[0]) < 1e-6 && Math.abs(last[1]-first[1]) < 1e-6) {
+              stitched.push(...seg.slice(1));
+            } else {
+              stitched.push(...seg);
+            }
+          } else {
+            stitched.push(...seg);
+          }
+        }
+
+        await sleep(0);
+      }
+
+      return stitched;
+    }
+
+    // -------------------- Encoding helpers (URL-safe base64) --------------------
+    function base64UrlEncode(str) {
+      const utf8 = new TextEncoder().encode(str);
+      let binary = '';
+      for (let i = 0; i < utf8.length; i++) binary += String.fromCharCode(utf8[i]);
+      let b64 = btoa(binary);
+      return b64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+    }
+
+    function base64UrlDecode(b64url) {
+      let b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4) b64 += '=';
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return new TextDecoder().decode(bytes);
+    }
+
+    // -------------------- Utils --------------------
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
     function escapeHtml(str) {
       return String(str).replace(/[&<>"']/g, m => ({
