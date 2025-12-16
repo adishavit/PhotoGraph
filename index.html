@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>PhotoGraph — Trip Mapper</title>
+
+  <!-- Leaflet (map) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+
+  <!-- EXIF parser -->
+  <script src="https://cdn.jsdelivr.net/npm/exif-js@2.3.0/exif.min.js"></script>
+
+  <style>
+    :root { --blue:#007AFF; --bg:#f5f5f7; --text:#111; --muted:#666; --card:#fff; --shadow:0 2px 12px rgba(0,0,0,.08); }
+
+    html, body { height:100%; margin:0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display:flex; flex-direction:column;
+    }
+
+    #controls {
+      background: var(--card);
+      box-shadow: var(--shadow);
+      z-index: 1000;
+      padding: 12px 12px 10px;
+    }
+
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+
+    .btn {
+      appearance:none; border:none; cursor:pointer;
+      padding: 11px 14px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 15px;
+      line-height: 1;
+      user-select: none;
+      display:inline-flex; align-items:center; justify-content:center;
+      gap:8px;
+    }
+    .btn.primary { background: var(--blue); color:#fff; }
+    .btn.secondary { background:#111; color:#fff; }
+    .btn.ghost { background:#e9e9ee; color:#111; }
+    .btn:disabled { opacity:.45; cursor:not-allowed; }
+
+    #fileInput { display:none; }
+
+    .filters {
+      margin-top: 10px;
+      display:flex; gap:10px; flex-wrap:wrap;
+    }
+    .filters input {
+      flex:1;
+      min-width: 160px;
+      padding: 9px 10px;
+      border: 1px solid #ddd;
+      border-radius: 10px;
+      background:#fff;
+      font-size: 13px;
+    }
+
+    .status {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+      display:flex; flex-direction:column; gap:6px;
+    }
+
+    progress { width:100%; height: 14px; }
+
+    #map { flex:1; width:100%; }
+
+    .tiny { font-size: 12px; color: var(--muted); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+  </style>
+</head>
+
+<body>
+  <div id="controls">
+    <div class="row">
+      <label class="btn primary" for="fileInput">📸 Choose photos</label>
+      <button id="processBtn" class="btn secondary" disabled>▶︎ Process</button>
+      <button id="clearBtn" class="btn ghost" disabled>Clear</button>
+      <span class="tiny" id="pickedInfo"></span>
+    </div>
+
+    <input id="fileInput" type="file" multiple accept="image/*" />
+
+    <div class="filters">
+      <input type="datetime-local" id="startTime" aria-label="Start time">
+      <input type="datetime-local" id="endTime" aria-label="End time">
+    </div>
+
+    <div class="status">
+      <progress id="progress" value="0" max="100"></progress>
+      <div id="statusLine">Pick photos, then tap Process.</div>
+      <div id="statsLine" class="tiny"></div>
+    </div>
+
+    <div class="tiny">
+      Notes: Photos are processed locally in your browser; the basemap loads online (OpenStreetMap).
+    </div>
+  </div>
+
+  <div id="map"></div>
+
+  <script>
+    // ---------- Map ----------
+    const map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors',
+      maxZoom: 19
+    }).addTo(map);
+
+    const photoLayer = L.layerGroup().addTo(map);
+    const pathLayer  = L.layerGroup().addTo(map);
+
+    // ---------- UI ----------
+    const fileInput  = document.getElementById('fileInput');
+    const processBtn = document.getElementById('processBtn');
+    const clearBtn   = document.getElementById('clearBtn');
+    const statusLine = document.getElementById('statusLine');
+    const statsLine  = document.getElementById('statsLine');
+    const progressEl = document.getElementById('progress');
+    const pickedInfo = document.getElementById('pickedInfo');
+
+    let selectedFiles = [];
+
+    fileInput.addEventListener('change', () => {
+      selectedFiles = Array.from(fileInput.files || []);
+      pickedInfo.textContent = selectedFiles.length ? `Selected: ${selectedFiles.length}` : '';
+      processBtn.disabled = selectedFiles.length === 0;
+      clearBtn.disabled   = selectedFiles.length === 0;
+      progressEl.value = 0;
+      statsLine.textContent = '';
+      statusLine.textContent = selectedFiles.length
+        ? 'Ready. Tap Process to extract GPS + draw route.'
+        : 'Pick photos, then tap Process.';
+    });
+
+    clearBtn.addEventListener('click', () => {
+      selectedFiles = [];
+      fileInput.value = '';
+      pickedInfo.textContent = '';
+      processBtn.disabled = true;
+      clearBtn.disabled = true;
+      progressEl.value = 0;
+      statusLine.textContent = 'Cleared. Pick photos, then tap Process.';
+      statsLine.textContent = '';
+      photoLayer.clearLayers();
+      pathLayer.clearLayers();
+    });
+
+    processBtn.addEventListener('click', async () => {
+      if (!selectedFiles.length) return;
+
+      processBtn.disabled = true;
+
+      const startFilter = document.getElementById('startTime').value
+        ? new Date(document.getElementById('startTime').value) : null;
+      const endFilter = document.getElementById('endTime').value
+        ? new Date(document.getElementById('endTime').value) : null;
+
+      const points = [];
+      let withGps = 0, noGps = 0, filteredOut = 0, errors = 0;
+
+      progressEl.value = 0;
+      statsLine.textContent = '';
+      statusLine.textContent = `Processing 0 / ${selectedFiles.length}...`;
+
+      // Sequential + small yielding keeps iPhone Safari responsive
+      for (let i = 0; i < selectedFiles.length; i++) {
+        const f = selectedFiles[i];
+        try {
+          const data = await getExifData(f);
+
+          if (data && data.lat != null && data.lng != null) {
+            withGps++;
+
+            // If user set time filters, we require a valid date for filtering
+            const d = data.date || null;
+            const timeFiltering = !!(startFilter || endFilter);
+
+            if (timeFiltering && !d) {
+              filteredOut++;
+            } else if (startFilter && d < startFilter) {
+              filteredOut++;
+            } else if (endFilter && d > endFilter) {
+              filteredOut++;
+            } else {
+              points.push(data);
+            }
+          } else {
+            noGps++;
+          }
+        } catch (e) {
+          errors++;
+        }
+
+        const pct = Math.round(((i + 1) / selectedFiles.length) * 100);
+        progressEl.value = pct;
+        statusLine.textContent = `Processing ${i + 1} / ${selectedFiles.length}...`;
+
+        if ((i + 1) % 10 === 0) await sleep(0);
+      }
+
+      statsLine.textContent =
+        `GPS: ${withGps} | No GPS: ${noGps} | Filtered out: ${filteredOut} | Errors: ${errors}`;
+
+      if (points.length > 0) {
+        drawRoute(points);
+        statusLine.textContent = `Done. Mapped ${points.length} points.`;
+      } else {
+        photoLayer.clearLayers();
+        pathLayer.clearLayers();
+        statusLine.textContent = 'Done. No usable GPS points found (or none within the selected time range).';
+      }
+
+      processBtn.disabled = false;
+    });
+
+    // ---------- EXIF extraction ----------
+    // We try:
+    // 1) exif-js direct getData(file) (works in some browsers)
+    // 2) fallback to ArrayBuffer + EXIF.readFromBinaryFile(DataView)
+    async function getExifData(file) {
+      // First attempt: EXIF.getData on File
+      const direct = await new Promise((resolve) => {
+        try {
+          EXIF.getData(file, function() {
+            try {
+              const parsed = parseExifFromGetTag(this, file);
+              resolve(parsed);
+            } catch {
+              resolve(null);
+            }
+          });
+        } catch {
+          resolve(null);
+        }
+      });
+
+      if (direct) return direct;
+
+      // Fallback: ArrayBuffer
+      const buf = await fileToArrayBuffer(file);
+      try {
+        const tags = EXIF.readFromBinaryFile(new DataView(buf));
+        return parseExifFromObject(tags, file);
+      } catch {
+        return null;
+      }
+    }
+
+    function parseExifFromGetTag(exifThis, file) {
+      const lat = EXIF.getTag(exifThis, 'GPSLatitude');
+      const lon = EXIF.getTag(exifThis, 'GPSLongitude');
+      const latRef = EXIF.getTag(exifThis, 'GPSLatitudeRef');
+      const lonRef = EXIF.getTag(exifThis, 'GPSLongitudeRef');
+
+      if (!lat || !lon || !latRef || !lonRef) return null;
+
+      const dateStr =
+        EXIF.getTag(exifThis, 'DateTimeOriginal') ||
+        EXIF.getTag(exifThis, 'DateTimeDigitized') ||
+        EXIF.getTag(exifThis, 'DateTime');
+
+      return {
+        name: file.name,
+        lat: toDecimal(lat, latRef),
+        lng: toDecimal(lon, lonRef),
+        date: parseExifDate(dateStr) || new Date(file.lastModified)
+      };
+    }
+
+    function parseExifFromObject(tags, file) {
+      const lat = tags.GPSLatitude;
+      const lon = tags.GPSLongitude;
+      const latRef = tags.GPSLatitudeRef;
+      const lonRef = tags.GPSLongitudeRef;
+
+      if (!lat || !lon || !latRef || !lonRef) return null;
+
+      const dateStr = tags.DateTimeOriginal || tags.DateTimeDigitized || tags.DateTime;
+
+      return {
+        name: file.name,
+        lat: toDecimal(lat, latRef),
+        lng: toDecimal(lon, lonRef),
+        date: parseExifDate(dateStr) || new Date(file.lastModified)
+      };
+    }
+
+    function fileToArrayBuffer(file) {
+      return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result);
+        r.onerror = reject;
+        r.readAsArrayBuffer(file);
+      });
+    }
+
+    function toDecimal(coords, ref) {
+      // coords can be [d,m,s] numbers or rationals; handle both
+      const d = rationalToFloat(coords[0]);
+      const m = rationalToFloat(coords[1]);
+      const s = rationalToFloat(coords[2]);
+      let val = d + (m / 60) + (s / 3600);
+      if (ref === 'S' || ref === 'W') val *= -1;
+      return val;
+    }
+
+    function rationalToFloat(x) {
+      // exif-js sometimes returns Number, sometimes {numerator, denominator}
+      if (typeof x === 'number') return x;
+      if (x && typeof x === 'object' && 'numerator' in x && 'denominator' in x && x.denominator) {
+        return x.numerator / x.denominator;
+      }
+      return Number(x) || 0;
+    }
+
+    function parseExifDate(s) {
+      if (!s || typeof s !== 'string') return null;
+      // "YYYY:MM:DD HH:MM:SS"
+      const b = s.split(/\D/).filter(Boolean);
+      if (b.length < 6) return null;
+      const y = Number(b[0]), mo = Number(b[1]) - 1, d = Number(b[2]);
+      const h = Number(b[3]), mi = Number(b[4]), se = Number(b[5]);
+      if ([y, mo, d, h, mi, se].some(n => Number.isNaN(n))) return null;
+      return new Date(y, mo, d, h, mi, se);
+    }
+
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+    // ---------- Draw ----------
+    function drawRoute(points) {
+      points.sort((a, b) => (a.date || 0) - (b.date || 0));
+
+      photoLayer.clearLayers();
+      pathLayer.clearLayers();
+
+      const latLngs = points.map(p => [p.lat, p.lng]);
+
+      L.polyline(latLngs, { color: '#007AFF', weight: 4, opacity: 0.85 }).addTo(pathLayer);
+
+      points.forEach((p, idx) => {
+        const isEdge = (idx === 0 || idx === points.length - 1);
+        const t = p.date ? p.date.toLocaleString() : 'Unknown time';
+
+        L.circleMarker([p.lat, p.lng], {
+          radius: isEdge ? 8 : 4,
+          color: isEdge ? 'red' : '#333',
+          fillColor: isEdge ? 'red' : '#fff',
+          fillOpacity: 1
+        })
+        .addTo(photoLayer)
+        .bindPopup(`<div class="mono">${escapeHtml(p.name)}</div><div>${escapeHtml(t)}</div>`);
+      });
+
+      map.fitBounds(L.polyline(latLngs).getBounds(), { padding: [40, 40] });
+    }
+
+    function escapeHtml(str) {
+      return String(str).replace(/[&<>"']/g, m => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[m]));
+    }
+  </script>
+</body>
+</html>
