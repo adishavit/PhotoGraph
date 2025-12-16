@@ -1,221 +1,659 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"/>
-<title>PhotoGraph — Trip Mapper</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>PhotoGraph — Trip Mapper</title>
 
-<!-- Leaflet -->
-<link rel="stylesheet"
-      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-      crossorigin="anonymous"/>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-        crossorigin="anonymous"></script>
+  <!-- Leaflet (SRI ok) -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
 
-<!-- exifr (lite) -->
-<script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/lite.umd.js"
-        integrity="sha256-jKg4u0Y/Tws6fZSJhDJJaQN8Xs8NsZTzEr1bvI+sE0c="
-        crossorigin="anonymous"></script>
+  <!-- exifr (NO SRI — prevents iOS from refusing to load due to hash mismatch) -->
+  <script src="https://cdn.jsdelivr.net/npm/exifr@7.1.3/dist/lite.umd.js" crossorigin="anonymous"></script>
 
-<style>
-/* --- styles unchanged from your draft except minor cleanup --- */
-:root {
-  --blue:#007AFF; --bg:#f5f5f7; --text:#1d1d1f; --muted:#6e6e73;
-  --card:#fff; --border:#d2d2d7; --warn:#ff9500; --ok:#34c759;
-}
-@media (prefers-color-scheme: dark) {
-  :root { --bg:#1d1d1f; --text:#f5f5f7; --muted:#98989d; --card:#2c2c2e; --border:#3a3a3c; }
-}
-html,body{margin:0;height:100%}
-body{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;background:var(--bg);color:var(--text);display:flex;flex-direction:column}
-#controls{background:var(--card);padding:16px;z-index:1000}
-.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
-.btn{border:none;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
-.btn.primary{background:var(--blue);color:#fff}
-.btn.secondary{background:var(--text);color:var(--bg)}
-.btn:disabled{opacity:.4}
-#fileInput{display:none}
-.filters,.options{margin-top:10px;display:flex;gap:8px;flex-wrap:wrap}
-.filters input,.options select{padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--card);color:var(--text)}
-.status{margin-top:10px;font-size:13px;color:var(--muted)}
-progress{width:100%;height:6px}
-#map{flex:1}
-.tiny{font-size:12px;color:var(--muted)}
-.success{color:var(--ok)} .warn{color:var(--warn)}
-</style>
+  <style>
+    :root {
+      --blue:#007AFF; --bg:#f5f5f7; --text:#1d1d1f; --muted:#6e6e73;
+      --card:#fff; --shadow:0 2px 12px rgba(0,0,0,.08); --border:#d2d2d7;
+      --warn:#ff9500; --success:#34c759; --radius:12px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#1d1d1f; --text:#f5f5f7; --muted:#98989d; --card:#2c2c2e; --shadow:0 2px 12px rgba(0,0,0,.3); --border:#3a3a3c; }
+    }
+    *,*::before,*::after{box-sizing:border-box}
+    html,body{height:100%;margin:0}
+    body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:flex;flex-direction:column;line-height:1.4}
+    #controls{background:var(--card);box-shadow:var(--shadow);z-index:1000;padding:16px}
+    .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .btn{appearance:none;border:none;cursor:pointer;padding:10px 14px;border-radius:var(--radius);font-weight:600;font-size:14px;line-height:1;user-select:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;background:var(--border);color:var(--text)}
+    .btn.primary{background:var(--blue);color:#fff}
+    .btn.secondary{background:var(--text);color:var(--bg)}
+    .btn:disabled{opacity:.4;cursor:not-allowed}
+    #fileInput{display:none}
+    .filters{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap}
+    .filters input{flex:1;min-width:150px;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);color:var(--text);font-size:13px}
+    .options{margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .chip{display:flex;gap:6px;align-items:center;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);font-size:13px;color:var(--muted)}
+    .chip select{padding:4px 8px;border:1px solid var(--border);border-radius:8px;background:var(--card);color:var(--text);font-size:13px}
+    .status{margin-top:12px;font-size:13px;color:var(--muted);display:flex;flex-direction:column;gap:6px}
+    progress{width:100%;height:6px;border-radius:3px;overflow:hidden;appearance:none}
+    progress::-webkit-progress-bar{background:var(--border)}
+    progress::-webkit-progress-value{background:var(--blue)}
+    #map{flex:1;width:100%}
+    .tiny{font-size:12px;color:var(--muted)}
+    .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px}
+    .warn{color:var(--warn)}
+    .success{color:var(--success)}
+    .privacy-note{margin-top:12px;padding:10px 12px;background:rgba(0,122,255,.08);border-radius:var(--radius);font-size:12px;color:var(--muted)}
+    .error-box{margin-top:10px;padding:10px 12px;border-radius:var(--radius);border:1px solid var(--border);background:rgba(255,149,0,.08);color:var(--text);display:none}
+    .error-box.show{display:block}
+  </style>
 </head>
 
 <body>
 <div id="controls">
   <div class="row">
     <label class="btn primary" for="fileInput">📸 Choose photos</label>
-    <button id="processBtn" class="btn secondary" disabled>Process</button>
-    <button id="clearBtn" class="btn" disabled>Clear</button>
-    <button id="shareBtn" class="btn" disabled>Share URL</button>
-    <button id="gmapsBtn" class="btn" disabled>Google Maps</button>
-    <button id="gpxBtn" class="btn" disabled>Export GPX</button>
-    <span id="pickedInfo" class="tiny"></span>
+    <button id="processBtn" class="btn secondary" type="button" disabled>▶︎ Process</button>
+    <button id="clearBtn" class="btn" type="button" disabled>Clear</button>
+    <button id="shareBtn" class="btn" type="button" disabled>Share URL</button>
+    <button id="gmapsBtn" class="btn" type="button" disabled>Google Maps</button>
+    <button id="gpxBtn" class="btn" type="button" disabled>Export GPX</button>
+    <span class="tiny" id="pickedInfo"></span>
   </div>
 
-  <input id="fileInput" type="file" multiple accept="image/*"/>
+  <input id="fileInput" type="file" multiple accept="image/*" />
 
   <div class="filters">
-    <input type="datetime-local" id="startTime">
-    <input type="datetime-local" id="endTime">
+    <input type="datetime-local" id="startTime" aria-label="Start time">
+    <input type="datetime-local" id="endTime" aria-label="End time">
   </div>
 
   <div class="options">
-    <label>Simplify:
+    <label class="chip" title="Controls path simplification before snapping (fewer points = faster + shorter URLs)">
+      Simplify:
       <select id="simplifySelect">
         <option value="light">Light</option>
         <option value="medium" selected>Medium</option>
         <option value="strong">Strong</option>
       </select>
     </label>
-    <span class="tiny">Always snapped to roads (OSRM driving)</span>
+    <span class="chip" title="Always snapped to roads. Coordinates are sent to OSRM routing service.">
+      Snap: OSRM driving (always)
+    </span>
   </div>
 
   <div class="status">
     <progress id="progress" value="0" max="100"></progress>
-    <div id="statusLine">Choose photos to begin</div>
+    <div id="statusLine">Tap “Choose photos”.</div>
     <div id="statsLine" class="tiny"></div>
   </div>
 
-  <div class="tiny">Photos stay local. Only coordinates are sent for routing.</div>
+  <div id="errorBox" class="error-box">
+    <div class="mono"><b>Runtime error:</b></div>
+    <div id="errorText" class="mono"></div>
+  </div>
+
+  <div class="privacy-note">
+    🔒 Photos processed locally in browser. Snapping sends only coordinates (no images) to routing service.
+  </div>
 </div>
 
 <div id="map"></div>
 
 <script>
-/* ========= configuration ========= */
-const CFG = {
-  OSRM_CHUNK: 80,
-  OSRM_MAX: 350,
-  SIMPLIFY: {light:12, medium:30, strong:70},
-  SHARE_MAX: 200,
-  GMAPS_MAX: 23
-};
+  // ---- On-screen error reporting (critical for iPhone debugging) ----
+  const errorBox = document.getElementById('errorBox');
+  const errorText = document.getElementById('errorText');
+  function showError(msg) {
+    errorText.textContent = String(msg || 'Unknown error');
+    errorBox.classList.add('show');
+  }
+  window.addEventListener('error', (e) => showError(e?.message || e));
+  window.addEventListener('unhandledrejection', (e) => showError(e?.reason?.message || e?.reason || e));
 
-/* ========= map ========= */
-const map = L.map('map').setView([20,0],2);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
-const photoLayer = L.layerGroup().addTo(map);
-const pathLayer  = L.layerGroup().addTo(map);
-
-/* ========= state ========= */
-let files=[], photoPts=[], route=[];
-
-/* ========= UI ========= */
-const $=id=>document.getElementById(id);
-$('fileInput').onchange=e=>{
-  files=[...e.target.files];
-  $('pickedInfo').textContent=files.length?`${files.length} selected`:'';
-  $('processBtn').disabled=!files.length;
-  $('clearBtn').disabled=!files.length;
-};
-$('clearBtn').onclick=()=>{location.hash='';location.reload()};
-$('processBtn').onclick=process;
-
-/* ========= main ========= */
-async function process(){
-  $('processBtn').disabled=true;
-  photoPts=[]; route=[];
-  photoLayer.clearLayers(); pathLayer.clearLayers();
-
-  const start=$('startTime').value?new Date($('startTime').value):null;
-  const end=$('endTime').value?new Date($('endTime').value):null;
-
-  for(let i=0;i<files.length;i++){
-    $('statusLine').textContent=`Reading ${i+1}/${files.length}`;
-    const d=await exifr.parse(files[i],{gps:true});
-    if(!d||!Number.isFinite(d.latitude)) continue;
-    const t=new Date(d.DateTimeOriginal||d.CreateDate||files[i].lastModified);
-    if(start&&t<start) continue;
-    if(end&&t>end) continue;
-    photoPts.push({lat:d.latitude,lng:d.longitude});
-    $('progress').value=(i+1)/files.length*100;
+  // ---- Sanity: confirm exifr loaded ----
+  if (typeof exifr === 'undefined') {
+    showError('exifr failed to load. (Likely SRI/caching/CDN). This build intentionally removed SRI for exifr.');
   }
 
-  if(photoPts.length<2){
-    $('statusLine').textContent='Not enough GPS points';
-    return;
-  }
-
-  photoPts.forEach((p,i)=>{
-    L.circleMarker([p.lat,p.lng],{radius:i==0||i==photoPts.length-1?7:4})
-      .addTo(photoLayer);
+  // ---- Config ----
+  const CONFIG = Object.freeze({
+    OSRM_CHUNK_SIZE: 80,
+    OSRM_MAX_POINTS: 350,
+    OSRM_RETRY_ATTEMPTS: 3,
+    OSRM_RETRY_DELAY_MS: 500,
+    SIMPLIFY_EPSILON: { light: 12, medium: 30, strong: 70 },
+    SIMPLIFY_MAX_POINTS: 600,
+    SHARE_MAX_POINTS: 200,
+    GMAPS_MAX_WAYPOINTS: 23,
   });
 
-  const simplified = simplify(photoPts.map(p=>[p.lat,p.lng]), $('simplifySelect').value);
-  $('statusLine').textContent='Snapping to roads…';
+  // ---- Map ----
+  const map = L.map('map', { zoomControl: true }).setView([20, 0], 2);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap',
+    maxZoom: 19,
+  }).addTo(map);
+  const photoLayer = L.layerGroup().addTo(map);
+  const pathLayer = L.layerGroup().addTo(map);
 
-  try{
-    route = await snapOSRM(simplified);
-    draw(route);
-    $('statusLine').innerHTML=`<span class="success">✓</span> Route mapped`;
-  }catch{
-    route = simplified;
-    draw(route);
-    $('statusLine').innerHTML=`<span class="warn">⚠</span> Routing failed — fallback used`;
+  const $ = (id) => document.getElementById(id);
+  const ui = {
+    fileInput: $('fileInput'),
+    processBtn: $('processBtn'),
+    clearBtn: $('clearBtn'),
+    shareBtn: $('shareBtn'),
+    gmapsBtn: $('gmapsBtn'),
+    gpxBtn: $('gpxBtn'),
+    statusLine: $('statusLine'),
+    statsLine: $('statsLine'),
+    progress: $('progress'),
+    pickedInfo: $('pickedInfo'),
+    simplifySelect: $('simplifySelect'),
+    startTime: $('startTime'),
+    endTime: $('endTime'),
+  };
+
+  const state = {
+    selectedFiles: [],
+    photoPoints: [],     // markers (optional)
+    routeLatLngs: [],    // snapped preferred; fallback only if OSRM fails
+    routeIsSnapped: false,
+  };
+
+  ui.fileInput.addEventListener('change', () => {
+    state.selectedFiles = [...(ui.fileInput.files || [])];
+    updateSelectionUI();
+  });
+
+  function updateSelectionUI() {
+    const n = state.selectedFiles.length;
+    ui.pickedInfo.textContent = n ? `${n} selected` : '';
+    ui.processBtn.disabled = !n;
+    ui.clearBtn.disabled = !n;
+    ui.shareBtn.disabled = true;
+    ui.gmapsBtn.disabled = true;
+    ui.gpxBtn.disabled = true;
+    ui.progress.value = 0;
+    ui.statsLine.textContent = '';
+    ui.statusLine.textContent = n ? 'Ready. Tap Process to extract GPS and snap to roads.' : 'Tap “Choose photos”.';
+    errorBox.classList.remove('show');
   }
 
-  $('shareBtn').disabled=false;
-  $('gmapsBtn').disabled=false;
-  $('gpxBtn').disabled=false;
-}
+  ui.clearBtn.addEventListener('click', () => {
+    state.selectedFiles = [];
+    state.photoPoints = [];
+    state.routeLatLngs = [];
+    state.routeIsSnapped = false;
 
-/* ========= snapping ========= */
-async function snapOSRM(pts){
-  if(pts.length>CFG.OSRM_MAX) pts=downsample(pts,CFG.OSRM_MAX);
-  const out=[];
-  for(let i=0;i<pts.length-1;i+=CFG.OSRM_CHUNK-1){
-    const c=pts.slice(i,i+CFG.OSRM_CHUNK);
-    const q=c.map(p=>`${p[1]},${p[0]}`).join(';');
-    const r=await fetch(`https://router.project-osrm.org/route/v1/driving/${q}?overview=full&geometries=geojson`);
-    const j=await r.json();
-    const seg=j.routes[0].geometry.coordinates.map(c=>[c[1],c[0]]);
-    if(out.length&&seg.length) seg.shift();
-    out.push(...seg);
+    ui.fileInput.value = '';
+    ui.pickedInfo.textContent = '';
+    ui.processBtn.disabled = true;
+    ui.clearBtn.disabled = true;
+    ui.shareBtn.disabled = true;
+    ui.gmapsBtn.disabled = true;
+    ui.gpxBtn.disabled = true;
+    ui.progress.value = 0;
+    ui.statusLine.textContent = 'Cleared. Tap “Choose photos”.';
+    ui.statsLine.textContent = '';
+    errorBox.classList.remove('show');
+
+    photoLayer.clearLayers();
+    pathLayer.clearLayers();
+
+    if (location.hash) history.replaceState(null, '', location.pathname);
+  });
+
+  ui.processBtn.addEventListener('click', processPhotos);
+
+  async function processPhotos() {
+    if (!state.selectedFiles.length) return;
+
+    disableDuringWork(true);
+
+    const startFilter = ui.startTime.value ? new Date(ui.startTime.value) : null;
+    const endFilter = ui.endTime.value ? new Date(ui.endTime.value) : null;
+
+    const points = [];
+    const stats = { withGps: 0, noGps: 0, filtered: 0, errors: 0 };
+    const total = state.selectedFiles.length;
+
+    ui.progress.value = 0;
+    ui.statsLine.textContent = '';
+    ui.statusLine.textContent = 'Starting…';
+
+    for (let i = 0; i < total; i++) {
+      ui.statusLine.textContent = `Reading EXIF ${i + 1}/${total}…`;
+
+      try {
+        const data = await extractGpsFromFile(state.selectedFiles[i]);
+        if (data) {
+          stats.withGps++;
+
+          const d = data.date;
+          const filtering = !!(startFilter || endFilter);
+
+          if (filtering && !(d instanceof Date) ) stats.filtered++;
+          else if (startFilter && d < startFilter) stats.filtered++;
+          else if (endFilter && d > endFilter) stats.filtered++;
+          else points.push(data);
+        } else {
+          stats.noGps++;
+        }
+      } catch (e) {
+        stats.errors++;
+      }
+
+      ui.progress.value = Math.round(((i + 1) / total) * 100);
+      if ((i + 1) % 20 === 0) await sleep(0);
+    }
+
+    ui.statsLine.textContent =
+      `GPS: ${stats.withGps} · No GPS: ${stats.noGps} · Filtered: ${stats.filtered} · Errors: ${stats.errors}`;
+
+    if (points.length < 2) {
+      state.photoPoints = [];
+      state.routeLatLngs = [];
+      state.routeIsSnapped = false;
+
+      photoLayer.clearLayers();
+      pathLayer.clearLayers();
+
+      ui.statusLine.textContent = 'Not enough usable GPS points (need at least 2).';
+      disableDuringWork(false);
+      ui.processBtn.disabled = false;
+      return;
+    }
+
+    points.sort((a, b) => (a.date || 0) - (b.date || 0));
+    state.photoPoints = points;
+
+    drawMarkers(points);
+
+    const rawLatLngs = points.map(p => [p.lat, p.lng]);
+    const simplified = simplifyPath(rawLatLngs, ui.simplifySelect.value);
+
+    ui.statusLine.textContent = 'Snapping to roads (OSRM)…';
+
+    try {
+      const snapped = await snapRouteOSRM(simplified);
+      state.routeLatLngs = snapped;
+      state.routeIsSnapped = true;
+      drawPolyline(snapped, true);
+      ui.statusLine.innerHTML = `<span class="success">✓</span> Snapped route drawn.`;
+    } catch (err) {
+      // rare fallback only
+      state.routeLatLngs = simplified;
+      state.routeIsSnapped = false;
+      drawPolyline(simplified, true);
+      ui.statusLine.innerHTML = `<span class="warn">⚠</span> OSRM failed — fallback path drawn.`;
+    }
+
+    ui.shareBtn.disabled = false;
+    ui.gmapsBtn.disabled = false;
+    ui.gpxBtn.disabled = false;
+
+    disableDuringWork(false);
+    ui.processBtn.disabled = false;
   }
-  return out;
-}
 
-/* ========= draw ========= */
-function draw(line){
-  const pl=L.polyline(line,{color:'#007AFF',weight:4}).addTo(pathLayer);
-  map.fitBounds(pl.getBounds(),{padding:[40,40]});
-}
-
-/* ========= simplify ========= */
-function simplify(pts,level){
-  const eps=CFG.SIMPLIFY[level];
-  return pts.length>600?downsample(pts,600):pts;
-}
-function downsample(a,n){
-  const r=[]; for(let i=0;i<n;i++) r.push(a[Math.round(i*(a.length-1)/(n-1))]);
-  return r;
-}
-
-/* ========= share ========= */
-$('shareBtn').onclick=()=>{
-  const enc=encodePolyline(downsample(route,CFG.SHARE_MAX));
-  location.hash='r='+btoa(enc);
-  navigator.clipboard.writeText(location.href);
-};
-
-/* ========= polyline encode ========= */
-function encodePolyline(coords){
-  let r='',la=0,lo=0;
-  for(const [lat,lng] of coords){
-    let a=Math.round(lat*1e5)-la; la+=a;
-    let b=Math.round(lng*1e5)-lo; lo+=b;
-    r+=enc(a)+enc(b);
+  function disableDuringWork(disabled) {
+    ui.processBtn.disabled = disabled;
+    ui.shareBtn.disabled = disabled || !state.routeLatLngs.length;
+    ui.gmapsBtn.disabled = disabled || !state.routeLatLngs.length;
+    ui.gpxBtn.disabled = disabled || !state.routeLatLngs.length;
   }
-  return r;
-}
-function enc(n){n=n<0?~(n<<1):(n<<1);let s='';while(n>=32){s+=String.fromCharCode((32|n&31)+63);n>>=5}return s+String.fromCharCode(n+63)}
+
+  // ---- EXIF via exifr ----
+  async function extractGpsFromFile(file) {
+    if (typeof exifr === 'undefined') throw new Error('exifr is undefined (failed to load).');
+
+    const tags = await exifr.parse(file, {
+      gps: true,
+      pick: ['latitude', 'longitude', 'DateTimeOriginal', 'CreateDate', 'ModifyDate'],
+    });
+
+    if (!tags) return null;
+
+    const lat = tags.latitude;
+    const lng = tags.longitude;
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+
+    const dt = tags.DateTimeOriginal || tags.CreateDate || tags.ModifyDate;
+    const date = coerceToDate(dt) || new Date(file.lastModified);
+
+    return { name: file.name, lat, lng, date };
+  }
+
+  function coerceToDate(x) {
+    if (!x) return null;
+    if (x instanceof Date && !isNaN(+x)) return x;
+    const d = new Date(x);
+    return isNaN(+d) ? null : d;
+  }
+
+  // ---- Simplification (RDP) ----
+  function simplifyPath(latLngs, level) {
+    const epsilon = CONFIG.SIMPLIFY_EPSILON[level] ?? CONFIG.SIMPLIFY_EPSILON.medium;
+    const simplified = rdpSimplify(latLngs, epsilon);
+    return simplified.length > CONFIG.SIMPLIFY_MAX_POINTS
+      ? downsampleEvenly(simplified, CONFIG.SIMPLIFY_MAX_POINTS)
+      : simplified;
+  }
+
+  function rdpSimplify(latLngs, epsilonMeters) {
+    if (!latLngs || latLngs.length < 3) return latLngs || [];
+    const meanLat = latLngs.reduce((sum, p) => sum + p[0], 0) / latLngs.length;
+    const pts = latLngs.map(([lat, lng]) => latLngToMeters(lat, lng, meanLat));
+
+    const keep = new Array(pts.length).fill(false);
+    keep[0] = true;
+    keep[pts.length - 1] = true;
+
+    rdpMark(pts, 0, pts.length - 1, epsilonMeters, keep);
+    return latLngs.filter((_, i) => keep[i]);
+  }
+
+  function rdpMark(pts, start, end, eps, keep) {
+    if (end <= start + 1) return;
+    let maxDist = -1, maxIdx = -1;
+    for (let i = start + 1; i < end; i++) {
+      const d = pointToSegmentDist(pts[i], pts[start], pts[end]);
+      if (d > maxDist) { maxDist = d; maxIdx = i; }
+    }
+    if (maxDist > eps && maxIdx !== -1) {
+      keep[maxIdx] = true;
+      rdpMark(pts, start, maxIdx, eps, keep);
+      rdpMark(pts, maxIdx, end, eps, keep);
+    }
+  }
+
+  function latLngToMeters(lat, lng, refLat) {
+    const R = 6371000, rad = Math.PI / 180;
+    return [R * lng * rad * Math.cos(refLat * rad), R * lat * rad];
+  }
+
+  function pointToSegmentDist([px, py], [ax, ay], [bx, by]) {
+    const dx = bx - ax, dy = by - ay;
+    if (dx === 0 && dy === 0) return Math.hypot(px - ax, py - ay);
+    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / (dx * dx + dy * dy)));
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  }
+
+  function downsampleEvenly(arr, max) {
+    if (!arr || arr.length <= max) return arr || [];
+    const step = (arr.length - 1) / (max - 1);
+    const result = Array.from({ length: max }, (_, i) => arr[Math.round(i * step)]);
+    result[0] = arr[0];
+    result[result.length - 1] = arr[arr.length - 1];
+    return result;
+  }
+
+  // ---- OSRM snapping (retry) ----
+  async function snapRouteOSRM(latLngs) {
+    if (latLngs.length < 2) return latLngs;
+
+    let work = latLngs.length > CONFIG.OSRM_MAX_POINTS
+      ? downsampleEvenly(latLngs, CONFIG.OSRM_MAX_POINTS)
+      : latLngs;
+
+    const chunks = [];
+    for (let i = 0; i < work.length - 1;) {
+      const end = Math.min(i + CONFIG.OSRM_CHUNK_SIZE, work.length);
+      chunks.push(work.slice(i, end));
+      i = end - 1;
+    }
+
+    const stitched = [];
+    for (const chunk of chunks) {
+      const coords = chunk.map(([lat, lng]) => `${lng},${lat}`).join(';');
+      const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson&steps=false`;
+
+      const json = await fetchWithRetry(url);
+      if (!json.routes?.[0]?.geometry) throw new Error('Invalid OSRM response');
+
+      const segment = json.routes[0].geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+
+      if (!stitched.length) stitched.push(...segment);
+      else {
+        const last = stitched[stitched.length - 1];
+        const first = segment[0];
+        const isDupe = Math.abs(last[0] - first[0]) < 1e-6 && Math.abs(last[1] - first[1]) < 1e-6;
+        stitched.push(...(isDupe ? segment.slice(1) : segment));
+      }
+
+      await sleep(50);
+    }
+
+    return stitched;
+  }
+
+  async function fetchWithRetry(url) {
+    let lastErr;
+    for (let attempt = 0; attempt < CONFIG.OSRM_RETRY_ATTEMPTS; attempt++) {
+      try {
+        const res = await fetch(url);
+        if (res.ok) return res.json();
+        if (res.status === 429 || res.status >= 500) {
+          await sleep(CONFIG.OSRM_RETRY_DELAY_MS * Math.pow(2, attempt));
+          continue;
+        }
+        throw new Error(`HTTP ${res.status}`);
+      } catch (e) {
+        lastErr = e;
+        await sleep(CONFIG.OSRM_RETRY_DELAY_MS * Math.pow(2, attempt));
+      }
+    }
+    throw lastErr || new Error('OSRM request failed');
+  }
+
+  // ---- Drawing ----
+  function drawMarkers(points) {
+    photoLayer.clearLayers();
+    points.forEach((p, idx) => {
+      const isEndpoint = idx === 0 || idx === points.length - 1;
+      L.circleMarker([p.lat, p.lng], {
+        radius: isEndpoint ? 8 : 4,
+        color: isEndpoint ? '#ff3b30' : '#1d1d1f',
+        fillColor: isEndpoint ? '#ff3b30' : '#fff',
+        fillOpacity: 1,
+        weight: 2,
+      }).addTo(photoLayer);
+    });
+  }
+
+  function drawPolyline(latLngs, fitBounds = false) {
+    pathLayer.clearLayers();
+    const polyline = L.polyline(latLngs, {
+      color: '#007AFF',
+      weight: 4,
+      opacity: 0.85,
+      lineCap: 'round',
+      lineJoin: 'round',
+    }).addTo(pathLayer);
+    if (fitBounds) map.fitBounds(polyline.getBounds(), { padding: [50, 50] });
+  }
+
+  // ---- Share URL (polyline encoding) ----
+  ui.shareBtn.addEventListener('click', async () => {
+    if (!state.routeLatLngs.length) return;
+    const sampled = downsampleEvenly(state.routeLatLngs, CONFIG.SHARE_MAX_POINTS);
+    const encoded = encodePolyline(sampled);
+
+    const payload = { v: 3, s: state.routeIsSnapped ? 1 : 0, p: encoded };
+    const b64 = base64UrlEncode(JSON.stringify(payload));
+    const url = `${location.origin}${location.pathname}#r=${b64}`;
+
+    try {
+      await navigator.clipboard.writeText(url);
+      ui.statusLine.innerHTML = '<span class="success">✓</span> Share URL copied.';
+    } catch {
+      prompt('Copy this URL:', url);
+    }
+  });
+
+  // ---- Google Maps link (downsampled) ----
+  ui.gmapsBtn.addEventListener('click', () => {
+    const line = state.routeLatLngs;
+    if (!line.length) return;
+
+    const sampled = downsampleEvenly(line, CONFIG.GMAPS_MAX_WAYPOINTS);
+    const origin = sampled[0].join(',');
+    const destination = sampled[sampled.length - 1].join(',');
+    const waypoints = sampled.slice(1, -1).map(p => p.join(',')).join('|');
+
+    const url = new URL('https://www.google.com/maps/dir/');
+    url.searchParams.set('api', '1');
+    url.searchParams.set('origin', origin);
+    url.searchParams.set('destination', destination);
+    if (waypoints) url.searchParams.set('waypoints', waypoints);
+    url.searchParams.set('travelmode', 'driving');
+
+    window.open(url.href, '_blank');
+  });
+
+  // ---- GPX export (snapped line only) ----
+  ui.gpxBtn.addEventListener('click', () => {
+    const line = state.routeLatLngs;
+    if (!line.length) return;
+
+    const now = new Date().toISOString();
+    const pts = line.map(([lat, lng]) => `      <trkpt lat="${lat}" lon="${lng}"/>`).join('\n');
+
+    const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="PhotoGraph"
+     xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata>
+    <name>PhotoGraph Trip</name>
+    <time>${now}</time>
+  </metadata>
+  <trk>
+    <name>Trip Route</name>
+    <trkseg>
+${pts}
+    </trkseg>
+  </trk>
+</gpx>`;
+    downloadFile(gpx, 'trip.gpx', 'application/gpx+xml');
+  });
+
+  function downloadFile(content, filename, mimeType) {
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ---- Restore from URL (#r=...) ----
+  (function restoreFromHash() {
+    const m = location.hash.match(/#r=([^&]+)/);
+    if (!m) return;
+
+    try {
+      const json = JSON.parse(base64UrlDecode(m[1]));
+      if (!(json && json.v === 3 && typeof json.p === 'string')) return;
+
+      const coords = decodePolyline(json.p);
+      if (!coords || coords.length < 2) return;
+
+      state.routeLatLngs = coords;
+      state.routeIsSnapped = !!json.s;
+      state.photoPoints = [];
+
+      photoLayer.clearLayers();
+      drawPolyline(coords, true);
+
+      ui.shareBtn.disabled = false;
+      ui.gmapsBtn.disabled = false;
+      ui.gpxBtn.disabled = false;
+
+      ui.statusLine.textContent = `Loaded shared route (${coords.length} points)`;
+      ui.statsLine.textContent = state.routeIsSnapped ? 'Road-snapped route' : 'Fallback route';
+    } catch {
+      // ignore
+    }
+  })();
+
+  // ---- Polyline encoding/decoding ----
+  function encodePolyline(coords) {
+    let result = '';
+    let prevLat = 0, prevLng = 0;
+
+    for (const [lat, lng] of coords) {
+      const latE5 = Math.round(lat * 1e5);
+      const lngE5 = Math.round(lng * 1e5);
+
+      result += encodeSigned(latE5 - prevLat);
+      result += encodeSigned(lngE5 - prevLng);
+
+      prevLat = latE5; prevLng = lngE5;
+    }
+    return result;
+  }
+
+  function encodeSigned(num) {
+    let sgn = num < 0 ? ~(num << 1) : (num << 1);
+    let out = '';
+    while (sgn >= 0x20) {
+      out += String.fromCharCode((0x20 | (sgn & 0x1f)) + 63);
+      sgn >>= 5;
+    }
+    out += String.fromCharCode(sgn + 63);
+    return out;
+  }
+
+  function decodePolyline(str) {
+    const coords = [];
+    let index = 0, lat = 0, lng = 0;
+
+    while (index < str.length) {
+      let shift = 0, result = 0, byte;
+      do {
+        byte = str.charCodeAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+      shift = 0; result = 0;
+      do {
+        byte = str.charCodeAt(index++) - 63;
+        result |= (byte & 0x1f) << shift;
+        shift += 5;
+      } while (byte >= 0x20);
+      lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+
+      coords.push([lat / 1e5, lng / 1e5]);
+    }
+    return coords;
+  }
+
+  // ---- Base64 URL helpers ----
+  function base64UrlEncode(str) {
+    const utf8 = new TextEncoder().encode(str);
+    let bin = '';
+    for (const b of utf8) bin += String.fromCharCode(b);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  function base64UrlDecode(b64url) {
+    let b64 = b64url.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const bin = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  }
+
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 </script>
 </body>
 </html>
